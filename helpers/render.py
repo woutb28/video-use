@@ -107,14 +107,7 @@ def resolve_path(maybe_path: str, base: Path) -> Path:
 
 HDR_TRANSFERS = {"smpte2084", "arib-std-b67"}  # PQ (HDR10) and HLG
 
-TONEMAP_CHAIN = (
-    "zscale=t=linear:npl=100,"
-    "format=gbrpf32le,"
-    "zscale=p=bt709,"
-    "tonemap=tonemap=hable:desat=0,"
-    "zscale=t=bt709:m=bt709:r=tv,"
-    "format=yuv420p"
-)
+TONEMAP_CHAIN = "format=yuv420p"
 
 
 def is_hdr_source(video: Path) -> bool:
@@ -132,15 +125,26 @@ def is_hdr_source(video: Path) -> bool:
 
 
 def is_portrait_source(video: Path) -> bool:
-    """Return True if the video's height > width (portrait / vertical)."""
+    """Return True if the video displays as portrait (taller than wide).
+    Accounts for rotation metadata — iPhone portrait clips stored as landscape
+    with a ±90° rotation tag display as portrait."""
     try:
         out = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "v:0",
              "-show_entries", "stream=width,height",
-             "-of", "csv=p=0", str(video)],
+             "-show_entries", "stream_side_data=rotation",
+             "-of", "default=noprint_wrappers=1", str(video)],
             capture_output=True, text=True, check=True,
         )
-        w, h = map(int, out.stdout.strip().split(","))
+        text = out.stdout
+        w = int(next(l.split("=")[1] for l in text.splitlines() if l.startswith("width=")))
+        h = int(next(l.split("=")[1] for l in text.splitlines() if l.startswith("height=")))
+        rotation = 0
+        for line in text.splitlines():
+            if line.startswith("rotation="):
+                rotation = abs(int(line.split("=")[1])) % 360
+        if rotation in (90, 270):
+            w, h = h, w
         return h > w
     except Exception:
         return False
@@ -172,9 +176,9 @@ def extract_segment(
 
     portrait = is_portrait_source(source)
     if draft:
-        scale = "scale=-2:1280" if portrait else "scale=1280:-2"
+        scale = "scale=1080:-2" if portrait else "scale=1280:-2"
     else:
-        scale = "scale=-2:1920" if portrait else "scale=1920:-2"
+        scale = "scale=1080:-2" if portrait else "scale=1920:-2"
 
     vf_parts: list[str] = []
     if is_hdr_source(source):
